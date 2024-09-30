@@ -1,30 +1,53 @@
+# config.py
 # Default settings
 
 class Config:
     # Chat Model
     TEMP_CHAT = 0
-    CHAT_MODEL = 'gpt-4o-mini'
-    # CHAT_MODEL ='gpt-4o-2024-08-06'
+    CHAT_MODEL = 'gpt-4o'
+    # CHAT_MODEL = 'gpt-4o-2024-08-06'
 
     # Model Agent Setting
     SHOW_DETAIL = False
     MEMORY_SIZE = 5
     MAX_ITERATIONS = 60
     MAX_EXECUTION_TIME = 60
-    AGENT_STOP_SUBSTRING_LIST = ["Agent stopped","import pandas as pd","import matplotlib.pyplot as plt","import numpy as np","plt.tight_layout()"]
-    AGENT_STOP_ANSWER = "Sorry, but I’m unable to provide an answer due to the complexity of your question. Could you please break it down into smaller parts and ask again? I’ll be happy to assist you further."
-    
+    AGENT_STOP_SUBSTRING_LIST = [
+        "Agent stopped",
+        "import pandas as pd",
+        "import matplotlib.pyplot as plt",
+        "import numpy as np",
+        "plt.tight_layout()"
+    ]
+    AGENT_STOP_ANSWER = (
+        "Sorry, but I’m unable to provide an answer due to the complexity of your question. "
+        "Could you please break it down into smaller parts and ask again? "
+        "I’ll be happy to assist you further."
+    )
+
     # Model Plot Setting
-    CHECK_ERROR_SUBSTRING_LIST = ["error", "invalid","incomplete"]
+    CHECK_ERROR_SUBSTRING_LIST = ["error", "invalid", "incomplete"]
     CHECK_PLOT_SUBSTRING_LIST = ["plt.tight_layout()"]
-    ADD_ON_PLOT_LIBRARY_LIST = ["import matplotlib.pyplot as plt", "import pandas as pd", "import numpy as np", "fig, ax = plt.subplots(figsize=(8, 8))"]
-    ADD_ON_FIG = f'''\nimage_fig_list.append(fig)\n'''
-    ADD_ON_FORMAT_LABEL_FOR_AXIS = '''\nax.set_xticklabels(['\\n'.join([label.get_text()[i:i+10] for i in range(0, len(label.get_text()), 10)]) for label in ax.get_xticklabels()], rotation=0)\nax.set_yticklabels(['\\n'.join([label.get_text()[i:i+10] for i in range(0, len(label.get_text()), 10)]) for label in ax.get_yticklabels()], rotation=0)\n'''
+    ADD_ON_PLOT_LIBRARY_LIST = [
+        "import matplotlib.pyplot as plt",
+        "import pandas as pd",
+        "import numpy as np",
+        "fig, ax = plt.subplots(figsize=(8, 8))"
+    ]
+    ADD_ON_FIG = '\nimage_fig_list.append(fig)\n'
+    ADD_ON_FORMAT_LABEL_FOR_AXIS = '''
+ax.set_xticklabels(['\\n'.join([label.get_text()[i:i+10] for i in range(0, len(label.get_text()), 10)]) for label in ax.get_xticklabels()], rotation=0)
+ax.set_yticklabels(['\\n'.join([label.get_text()[i:i+10] for i in range(0, len(label.get_text()), 10)]) for label in ax.get_yticklabels()], rotation=0)
+'''
 
     # Model Data Change Setting
     CHECK_DATACHANGE_SUBSTRING_LIST = ["df_update"]
-    ADD_ON_DATACHANGE_LIBRARY_LIST = ["import pandas as pd", "import numpy as np", "import copy"]
-    ADD_ON_DF = f'''\ndf_change.append(df_update)\n'''
+    ADD_ON_DATACHANGE_LIBRARY_LIST = [
+        "import pandas as pd",
+        "import numpy as np",
+        "import copy"
+    ]
+    ADD_ON_DF = '\ndf_change.append(df_update)\n'
 
     # Model Prompt Setting
     PROMPT_CLEAN_DATA = """
@@ -36,10 +59,10 @@ class Config:
         """
 
     PROMPT_CREATE_DATA_CLEAN_SUMMARY = """
-        Summarize the data cleaning result in around 130 words for non-technical audience. Make sure use a friendly tone, smartly use bold text and bullet points, and without any titles. Here is the result:
+        Summarize the data cleaning result in around 130 words for a non-technical audience. Use a friendly tone, smartly use bold text and bullet points, and avoid any titles. Here is the result:
         {result}
         """
-    
+
     DEFAULT_PREFIX_SINGLE_DF = """
         You are working with a pandas dataframe in Python. The name of the dataframe is `df`. 
         The column names in the dataframe may differ from those in the question. Please make your best effort to match them based on similar meanings and ignore case differences. Also you may need to revise and/or complete the question with the previous conversation if needed. 
@@ -83,7 +106,3 @@ class Config:
         
         You may need to revise the current question with the previous conversation before passing to tools. You should use the tools below to answer the question posed of you:
         """
-    
-    @staticmethod
-    def __init__():
-        pass
