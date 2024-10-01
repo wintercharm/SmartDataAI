@@ -1,5 +1,5 @@
 # modeler.py
-from langchain_openai import ChatOpenAI
+from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -7,7 +7,7 @@ import pandas as pd
 import copy
 import logging
 import time
-import random
+from functools import wraps
 
 from .config import Config
 from .memory import Memory
@@ -15,9 +15,30 @@ from .custom_agent import custom_create_pandas_dataframe_agent
 from .util import clean_dataframe
 
 # Import exceptions for rate limiting
-from openai.error import RateLimitError, Timeout
+from openai import RateLimitError, Timeout
 
 logger = logging.getLogger('SmartData')
+
+def retry_on_rate_limit(max_retries=5, initial_delay=1, backoff_factor=2):
+    """
+    Decorator to retry a function if RateLimitError or Timeout is encountered.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            delay = initial_delay
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except (RateLimitError, Timeout) as e:
+                    retries += 1
+                    logger.warning(f"Rate limit or timeout encountered. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    delay *= backoff_factor
+            raise Exception("Maximum retries exceeded due to rate limiting.")
+        return wrapper
+    return decorator
 
 class SmartData:
     def __init__(self, df_list, llm=None, show_detail=Config.SHOW_DETAIL, memory_size=Config.MEMORY_SIZE,
@@ -42,38 +63,18 @@ class SmartData:
         self.memory = Memory()
         self.message_count = 1
 
-    def _retry_on_rate_limit(max_retries=5, initial_delay=1, backoff_factor=2):
-        """
-        Decorator to retry a function if RateLimitError or Timeout is encountered.
-        """
-        def decorator(func):
-            def wrapper(*args, **kwargs):
-                retries = 0
-                delay = initial_delay
-                while retries < max_retries:
-                    try:
-                        return func(*args, **kwargs)
-                    except (RateLimitError, Timeout) as e:
-                        retries += 1
-                        logger.warning(f"Rate limit or timeout encountered. Retrying in {delay} seconds...")
-                        time.sleep(delay)
-                        delay *= backoff_factor
-                raise Exception("Maximum retries exceeded due to rate limiting.")
-            return wrapper
-        return decorator
-
     def create_model(self, use_openai_llm=True, seed=0):
         df = self.df_list
         prefix_df = Config.DEFAULT_PREFIX_SINGLE_DF
         if use_openai_llm:
             self.llm = ChatOpenAI(temperature=Config.TEMP_CHAT, model=Config.CHAT_MODEL, seed=seed)
 
-        self.model = custom_create_pandas_dataframe_agent(
+        prompt, agent_executor = custom_create_pandas_dataframe_agent(
             llm=self.llm,
             df=df,
             verbose=self.show_detail,
             return_intermediate_steps=True,
-            agent_type="tool-calling",
+            agent_type="zero-shot-react-description",
             allow_dangerous_code=True,
             prefix=prefix_df,
             max_iterations=self.max_iterations,
@@ -81,20 +82,27 @@ class SmartData:
             agent_executor_kwargs={'handle_parsing_errors': True}
         )
 
-    @_retry_on_rate_limit()
+        self.model = agent_executor
+        return prompt, agent_executor
+
+    @retry_on_rate_limit()
     def _invoke_model(self, question_with_history):
         """
         Invokes the model with retry logic in case of rate limiting.
         """
-        return self.model.invoke({"input": question_with_history})
+        return self.model.run(question=question_with_history)
 
     def run_model(self, question):
+        answer = ""
+        code_list_plot_with_add_on = []
+        code_list_datachange_with_add_on = []
+        response = None
+        code_list = []
         for i in range(10):
             self.create_model(use_openai_llm=True, seed=i)
             try:
                 self.image_fig_list.clear()
                 self.df_change.clear()
-                code_list = []
                 has_plots = False
                 has_changes_to_df = False
 
@@ -136,9 +144,9 @@ class SmartData:
             except Exception as e:
                 logger.error(f"Failed to process: {e}")
 
-        return answer, has_plots, has_changes_to_df, self.image_fig_list, self.df_list
+        return answer, has_plots, has_changes_to_df, self.image_fig_list, self.df_list, response, code_list, code_list_plot_with_add_on, code_list_datachange_with_add_on
 
-    @_retry_on_rate_limit()
+    @retry_on_rate_limit()
     def _invoke_summary_chain(self, result):
         """
         Invokes the summary chain with retry logic in case of rate limiting.
@@ -162,20 +170,18 @@ class SmartData:
             logger.error(f"Failed to create data clean summary: {e}")
             return self.prompt_create_data_clean_summary, ""
 
-    # ... (rest of the class remains unchanged)
-
     def clean_data_without_ai(self):
         df_clean, summary = clean_dataframe(self.df_list)
         self.df_list = df_clean
         return summary, df_clean
 
     def clean_data_with_ai(self):
-        answer, has_changes_to_df, df_new = self.run_model(question=self.prompt_clean_data)
-        return answer, has_changes_to_df, df_new
+        answer, has_changes_to_df, *_ = self.run_model(question=self.prompt_clean_data)
+        return answer, has_changes_to_df, self.df_list
 
     def clean_data(self):
-        summary_without_ai, _ = self.clean_data_without_ai()
-        answer, has_changes_to_df, _ = self.clean_data_with_ai()
+        summary_without_ai, *_ = self.clean_data_without_ai()
+        answer, has_changes_to_df, *_ = self.clean_data_with_ai()
         summary = summary_without_ai + answer
         _, final_summary = self.create_data_clean_summary(summary)
         return final_summary, has_changes_to_df, self.df_list
@@ -189,16 +195,12 @@ class SmartData:
     def extract_code_from_response(self, response):
         code_list = []
         try:
-            last_response = response['intermediate_steps'][-1]
-            if len(last_response) > 1 and not any(
-                substring in str(last_response[1]).lower() for substring in self.check_error_substring_list
-            ):
-                for tool_call in response['intermediate_steps'][-1][0].message_log[0].tool_calls:
-                    if tool_call['name'] == 'python_repl_ast':
-                        code = tool_call['args']['query']
-                        code_list.append(code)
-        except Exception:
-            pass
+            for action in response["intermediate_steps"]:
+                if action[0].tool == "python_repl_ast":
+                    code = action[0].tool_input
+                    code_list.append(code)
+        except Exception as e:
+            logger.error(f"Error extracting code from response: {e}")
         return code_list
 
     def process_plot_code(self, code_list):

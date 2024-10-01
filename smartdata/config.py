@@ -4,8 +4,7 @@
 class Config:
     # Chat Model
     TEMP_CHAT = 0
-    CHAT_MODEL = 'gpt-4o'
-    # CHAT_MODEL = 'gpt-4o-2024-08-06'
+    CHAT_MODEL = 'gpt-4'  # Corrected model name
 
     # Model Agent Setting
     SHOW_DETAIL = False
