@@ -27,13 +27,13 @@ This is the result of `print(df.describe())`:
 {df_describe}
 
 Begin!
-Question: {{question}}
-{{agent_scratchpad}}"""
+Question: {question}
+{agent_scratchpad}"""
 
 SUFFIX_NO_DF = """
 Begin!
-Question: {{question}}
-{{agent_scratchpad}}"""
+Question: {question}
+{agent_scratchpad}"""
 
 def custom_create_pandas_dataframe_agent(
     llm: BaseChatModel,
@@ -89,27 +89,29 @@ def custom_create_pandas_dataframe_agent(
 
     # Prepare prompt
     if include_df_in_prompt:
-        df_head = df.head(number_of_head_rows).to_markdown()
-        df_describe = df.describe().to_markdown()
-        formatted_suffix = (suffix or SUFFIX_WITH_DF).format(
-            df_head=df_head,
-            df_describe=df_describe,
-        )
+        df_head = df.head(number_of_head_rows).fillna("").to_markdown()
+        df_describe = df.describe().fillna("").to_markdown()
+        formatted_suffix = suffix or SUFFIX_WITH_DF
+        partials = {
+            "df_head": df_head,
+            "df_describe": df_describe,
+        }
     else:
         formatted_suffix = suffix or SUFFIX_NO_DF
+        partials = {}
 
     prompt_template = (prefix or PREFIX) + "\n\n" + formatted_suffix
 
     prompt = PromptTemplate(
         input_variables=["question", "agent_scratchpad"],
         template=prompt_template,
+        partial_variables=partials,  # Pass df_head and df_describe here
     )
 
     # Create agent
     agent = create_pandas_dataframe_agent(
         llm=llm,
         df=df,
-        agent_type=agent_type,
         callback_manager=callback_manager,
         verbose=verbose,
         return_intermediate_steps=return_intermediate_steps,
@@ -117,7 +119,6 @@ def custom_create_pandas_dataframe_agent(
         max_execution_time=max_execution_time,
         early_stopping_method=early_stopping_method,
         agent_executor_kwargs=agent_executor_kwargs,
-        tools=tools,
         prompt=prompt,
         **kwargs,
     )

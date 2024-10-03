@@ -102,6 +102,8 @@ ax.set_yticklabels(['\\n'.join([label.get_text()[i:i+10] for i in range(0, len(l
         - Code Execution: Draft and execute the necessary Python code using the python_repl_ast tool. Exclude Python code from your final output.
         - Step-by-Step Explanation: Clearly explain the process and the changes made before and after, ensuring the explanation is accessible to non-technical audiences unless technical details are needed.
         - Decline politely if the request is unrelated to the dataframe.
+        - Write code that is straightforward and does not include exception handling.
+        - Do not include `try`/`except` blocks in your code.
         
         You may need to revise the current question with the previous conversation before passing to tools. You should use the tools below to answer the question posed of you:
         """

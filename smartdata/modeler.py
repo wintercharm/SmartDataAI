@@ -1,5 +1,9 @@
 # modeler.py
-from langchain.chat_models import ChatOpenAI
+import ast
+import logging
+import builtins
+
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -13,6 +17,7 @@ from .config import Config
 from .memory import Memory
 from .custom_agent import custom_create_pandas_dataframe_agent
 from .util import clean_dataframe
+
 
 # Import exceptions for rate limiting
 from openai import RateLimitError, Timeout
@@ -42,9 +47,9 @@ def retry_on_rate_limit(max_retries=5, initial_delay=1, backoff_factor=2):
 
 class SmartData:
     def __init__(self, df_list, llm=None, show_detail=Config.SHOW_DETAIL, memory_size=Config.MEMORY_SIZE,
-                 max_iterations=Config.MAX_ITERATIONS, max_execution_time=Config.MAX_EXECUTION_TIME, seed=0):
+                 max_iterations=Config.MAX_ITERATIONS, max_execution_time=Config.MAX_EXECUTION_TIME):
 
-        self.llm = llm or ChatOpenAI(temperature=Config.TEMP_CHAT, model=Config.CHAT_MODEL, seed=seed)
+        self.llm = llm or ChatOpenAI(temperature=Config.TEMP_CHAT, model=Config.CHAT_MODEL)
         self.df_list = copy.deepcopy(df_list)
         self.df_change = []
         self.memory_size = memory_size
@@ -67,7 +72,7 @@ class SmartData:
         df = self.df_list
         prefix_df = Config.DEFAULT_PREFIX_SINGLE_DF
         if use_openai_llm:
-            self.llm = ChatOpenAI(temperature=Config.TEMP_CHAT, model=Config.CHAT_MODEL, seed=seed)
+            self.llm = ChatOpenAI(temperature=Config.TEMP_CHAT, model=Config.CHAT_MODEL)
 
         prompt, agent_executor = custom_create_pandas_dataframe_agent(
             llm=self.llm,
@@ -90,22 +95,24 @@ class SmartData:
         """
         Invokes the model with retry logic in case of rate limiting.
         """
-        return self.model.run(question=question_with_history)
+        return self.model.invoke({"question": question_with_history})
 
     def run_model(self, question):
         answer = ""
+        has_plots = False
+        has_changes_to_df = False
+        if self.df_list is None:
+            self.df_list = pd.DataFrame()
+        self.image_fig_list.clear()
+        self.df_change.clear()
+        code_list = []
         code_list_plot_with_add_on = []
         code_list_datachange_with_add_on = []
         response = None
-        code_list = []
-        for i in range(10):
-            self.create_model(use_openai_llm=True, seed=i)
-            try:
-                self.image_fig_list.clear()
-                self.df_change.clear()
-                has_plots = False
-                has_changes_to_df = False
 
+        for i in range(10):
+            self.create_model(use_openai_llm=True)
+            try:
                 question_with_history = question
                 if self.memory.is_not_empty():
                     last_conversations = self.memory.recall_last_conversation(self.memory_size)
@@ -119,21 +126,17 @@ class SmartData:
                 answer = response['output']
                 code_list = self.extract_code_from_response(response)
 
-                # Process plot code
+                # Process and execute plot code
                 code_list_plot_with_add_on = self.process_plot_code(code_list)
-                for plot_code in code_list_plot_with_add_on:
-                    exec(plot_code, {'image_fig_list': self.image_fig_list, 'df': self.df_list}, {})
                 if self.image_fig_list:
                     has_plots = True
 
-                # Process data change code
+                # Process and execute data change code
                 code_list_datachange_with_add_on = self.process_datachange_code(code_list)
-                for data_code in code_list_datachange_with_add_on:
-                    exec(data_code, {'df_change': self.df_change, 'df': self.df_list}, {})
                 if self.df_change:
                     has_changes_to_df = not self.df_list.equals(self.df_change[-1])
                     self.df_list = copy.deepcopy(self.df_change[-1])
-                    self.create_model(use_openai_llm=True, seed=i)
+                    self.create_model(use_openai_llm=True)
 
                 # Store the chat history
                 self.remember_conversation(question, answer, code_list)
@@ -143,8 +146,28 @@ class SmartData:
                     break
             except Exception as e:
                 logger.error(f"Failed to process: {e}")
+                # Ensure all variables are initialized even if an exception occurs
+                answer = answer or ""
+                has_plots = has_plots or False
+                has_changes_to_df = has_changes_to_df or False
+                self.image_fig_list = self.image_fig_list or []
+                if self.df_list is None:
+                    self.df_list = pd.DataFrame()
+                response = response or {}
 
-        return answer, has_plots, has_changes_to_df, self.image_fig_list, self.df_list, response, code_list, code_list_plot_with_add_on, code_list_datachange_with_add_on
+        # Ensure all variables are returned
+        return (
+            answer,
+            has_plots,
+            has_changes_to_df,
+            self.image_fig_list,
+            self.df_list,
+            response,
+            code_list,
+            code_list_plot_with_add_on,
+            code_list_datachange_with_add_on
+        )
+
 
     @retry_on_rate_limit()
     def _invoke_summary_chain(self, result):
@@ -216,8 +239,23 @@ class SmartData:
             code_with_imports = "\n".join(missing_imports) + "\n" + code if missing_imports else code
             code_with_format_label = code_with_imports + Config.ADD_ON_FORMAT_LABEL_FOR_AXIS
             code_with_fig = code_with_format_label + Config.ADD_ON_FIG
-            code_list_plot_with_add_on.append(code_with_fig)
+
+            # Validate the code before adding it
+            if self.is_valid_exception_handling(code_with_fig):
+                code_list_plot_with_add_on.append(code_with_fig)
+            else:
+                logger.error("Invalid exception handling in generated code. Skipping execution.")
+                continue
+
+        # Execute code with exception handling
+        for plot_code in code_list_plot_with_add_on:
+            try:
+                exec(plot_code, {'image_fig_list': self.image_fig_list, 'df': self.df_list}, {})
+            except Exception as e:
+                logger.error(f"Error executing plot code:\n{plot_code}\nException: {e}")
+
         return code_list_plot_with_add_on
+
 
     def process_datachange_code(self, code_list):
         code_list_datachange = [
@@ -231,5 +269,47 @@ class SmartData:
             ]
             code_with_imports = "\n".join(missing_imports) + "\n" + code if missing_imports else code
             code_with_df = code_with_imports + Config.ADD_ON_DF
-            code_list_datachange_with_add_on.append(code_with_df)
+
+            # Validate the code before adding it
+            if self.is_valid_exception_handling(code_with_df):
+                code_list_datachange_with_add_on.append(code_with_df)
+            else:
+                logger.error("Invalid exception handling in generated code. Skipping execution.")
+                continue
+        # Execute code with exception handling
+        for data_code in code_list_datachange_with_add_on:
+            try:
+                exec(data_code, {'df_change': self.df_change, 'df': self.df_list}, {})
+            except Exception as e:
+                logger.error(f"Error executing data change code:\n{data_code}\nException: {e}")
+
         return code_list_datachange_with_add_on
+
+    import builtins
+
+    def is_valid_exception_handling(self, code_str):
+        try:
+            tree = ast.parse(code_str)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ExceptHandler):
+                    if node.type is not None:
+                        if isinstance(node.type, ast.Name):
+                            exception_name = node.type.id
+                        elif isinstance(node.type, ast.Attribute):
+                            exception_name = node.type.attr
+                        else:
+                            logger.error(f"Invalid exception type in except clause: {ast.dump(node.type)}")
+                            return False
+                        # Check if the exception type is a valid exception class
+                        exception_class = getattr(builtins, exception_name, None)
+                        if exception_class is None or not issubclass(exception_class, BaseException):
+                            logger.error(f"Invalid exception type: {exception_name}")
+                            return False
+                    else:
+                        # 'except:' with no exception type is acceptable
+                        pass
+            return True  # Move this outside the loop
+        except SyntaxError as e:
+            logger.error(f"Syntax error when parsing code: {e}")
+            return False
+
